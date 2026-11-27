@@ -5,7 +5,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
-VERSION="1.0"
+# Version shown to people comes from ./VERSION. The build number (what Sparkle
+# compares to decide an update is newer) is the commit count, so it only goes up.
+VERSION="$(cat VERSION)"
+BUILD="${BUILD:-$(git rev-list --count HEAD)}"
+# Where installed copies look for updates. Upload release/ (see scripts/release.sh) there.
+FEED_URL="${FEED_URL:-https://riviantrackr.com/pixelshift/appcast.xml}"
+SIGN="${SIGN_IDENTITY:--}"
 
 ARCHS=(--arch arm64 --arch x86_64)
 swift build -c release "${ARCHS[@]}"
@@ -13,7 +19,19 @@ swift build -c release "${ARCHS[@]}"
 APP="build/PixelShift.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$(swift build -c release "${ARCHS[@]}" --show-bin-path)/PixelShift" "$APP/Contents/MacOS/PixelShift"
+BIN="$(swift build -c release "${ARCHS[@]}" --show-bin-path)"
+cp "$BIN/PixelShift" "$APP/Contents/MacOS/PixelShift"
+
+# Sparkle (self-updates). Its helpers are re-signed with our identity, innermost
+# first, as Sparkle's sandboxing guide describes.
+mkdir -p "$APP/Contents/Frameworks"
+ditto "$BIN/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
+SPK="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+codesign -f -s "$SIGN" -o runtime --timestamp=none "$SPK/XPCServices/Installer.xpc"
+codesign -f -s "$SIGN" -o runtime --timestamp=none --preserve-metadata=entitlements "$SPK/XPCServices/Downloader.xpc"
+codesign -f -s "$SIGN" -o runtime --timestamp=none "$SPK/Autoupdate"
+codesign -f -s "$SIGN" -o runtime --timestamp=none "$SPK/Updater.app"
+codesign -f -s "$SIGN" -o runtime --timestamp=none "$APP/Contents/Frameworks/Sparkle.framework"
 
 # Icon/AppIcon.icon is an Icon Composer (Liquid Glass) icon. actool compiles it
 # into Assets.car (layered, rendered live by macOS 26+) plus AppIcon.icns for older systems.
@@ -35,7 +53,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>com.riviantrackr.pixelshift</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-    <key>CFBundleVersion</key><string>${VERSION}</string>
+    <key>CFBundleVersion</key><string>${BUILD}</string>
+    <key>SUFeedURL</key><string>${FEED_URL}</string>
+    <key>SUPublicEDKey</key><string>$(cat Support/sparkle-public-key.txt)</string>
+    <key>SUEnableInstallerLauncherService</key><true/>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleIconName</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -71,11 +92,20 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature with the sandbox entitlements and hardened runtime. For the
-# App Store this becomes an Apple Distribution identity (set SIGN_IDENTITY).
-codesign --force --sign "${SIGN_IDENTITY:--}" --options runtime \
-    --entitlements Support/PixelShift.entitlements --timestamp=none "$APP"
-echo "Built $APP"
+# Ad-hoc signature with the sandbox entitlements and hardened runtime. For copies
+# you hand out, set SIGN_IDENTITY to your "Developer ID Application" identity.
+ENTITLEMENTS=Support/PixelShift.entitlements
+if [[ "$SIGN" == "-" ]]; then
+    # Ad-hoc signatures have no Team ID, so the hardened runtime would refuse to
+    # load Sparkle.framework. Allow it for local builds only; Developer ID builds
+    # share one Team ID and keep library validation on.
+    ENTITLEMENTS=build/adhoc.entitlements
+    cp Support/PixelShift.entitlements "$ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$ENTITLEMENTS"
+fi
+codesign --force --sign "$SIGN" --options runtime \
+    --entitlements "$ENTITLEMENTS" --timestamp=none "$APP"
+echo "Built $APP ($VERSION, build $BUILD)"
 
 if [[ "${1:-}" == "--install" ]]; then
     rm -rf /Applications/PixelShift.app

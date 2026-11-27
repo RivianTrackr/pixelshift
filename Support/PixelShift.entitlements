@@ -8,5 +8,13 @@
     <key>com.apple.security.files.user-selected.read-write</key><true/>
     <!-- Remember the watermark image across launches. -->
     <key>com.apple.security.files.bookmarks.app-scope</key><true/>
+    <!-- Sparkle: download update feeds and archives. -->
+    <key>com.apple.security.network.client</key><true/>
+    <!-- Sparkle: reach its installer, which runs outside the sandbox. -->
+    <key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+    <array>
+        <string>com.riviantrackr.pixelshift-spks</string>
+        <string>com.riviantrackr.pixelshift-spki</string>
+    </array>
 </dict>
 </plist>

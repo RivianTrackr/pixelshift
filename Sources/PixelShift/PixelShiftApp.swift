@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 import SwiftUI
 import UserNotifications
 
@@ -6,6 +7,7 @@ import UserNotifications
 struct PixelShiftApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel.shared
+    @State private var updates = Updates()
 
     var body: some Scene {
         Window("PixelShift", id: "main") {
@@ -14,6 +16,10 @@ struct PixelShiftApp: App {
         .defaultSize(width: 480, height: 860)
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updates.check() }
+                    .disabled(!updates.canCheck)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Open…") { model.chooseFilesAndProcess() }
                     .keyboardShortcut("o")
@@ -41,6 +47,24 @@ struct PixelShiftApp: App {
             }
         }
     }
+}
+
+/// Sparkle updater for copies downloaded from the web. Reads SUFeedURL and
+/// SUPublicEDKey from Info.plist; asks the user about automatic checks on second launch.
+@MainActor @Observable
+final class Updates {
+    private let controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    private(set) var canCheck = false
+    private var observation: NSKeyValueObservation?
+
+    init() {
+        observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+            let value = updater.canCheckForUpdates
+            Task { @MainActor in self?.canCheck = value }
+        }
+    }
+
+    func check() { controller.checkForUpdates(nil) }
 }
 
 /// Backs the "Resize with PixelShift" item in Finder's right-click menu
