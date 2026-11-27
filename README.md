@@ -1,68 +1,62 @@
-# PixelShift
+<p align="center"><img src="Icon/preview.png" width="128" height="128" alt="PixelShift icon"></p>
 
-*Shift pixels, reshape possibilities.*
+<h1 align="center">PixelShift</h1>
 
-A native Mac replacement for Resize Master 1.3 (Intel-only, 2015).
-Drop images or folders on the window or the Dock icon, choose a destination
-folder, and every image is resized with the settings in the window.
+<p align="center"><em>Shift pixels, reshape possibilities.</em></p>
 
-## What it does
+<p align="center">A fast, native Mac app for resizing photos in batches.<br>
+Drop in images or whole folders, and every one is resized, cropped, watermarked or converted the way you set it up.</p>
 
-- **Files:** save to a chosen folder (keeps folder structure, copies non-image files) or next to the originals; optional name suffix (photo.jpg → photo-1200.jpg, required beside originals); asks before replacing (Replace / Skip / Apply to all). Beside originals, the sandbox asks once per folder and remembers it.
-- **Resize:** do not resize, by percent, by width, by height, fit to rectangle, crop to aspect ratio, crop then fit; scale down only.
-- **Metadata:** remove all, keep all, or keep all except location (drops GPS and IPTC place fields), add artist and copyright, set DPI. Photos are always saved upright (EXIF rotation applied).
-- **Watermark:** any image, nine positions plus stretch, pixel offsets inward from the edge.
-- **Output:** JPEG, PNG, TIFF, HEIC; original, sRGB, Display P3 or Adobe RGB; quality; fill color for transparent areas.
-- **Presets:** named sets of settings in the window and the Presets menu (⌘1–⌘9); shows "(edited)" when settings drift from the chosen preset. Starts with "Web, 1200 tall" and "Square 1080".
-- **Finder:** right-click images or folders → Quick Actions (or Services) → Resize with PixelShift, using the current settings.
-- **Updates:** PixelShift → Check for Updates…, plus automatic checks (asked on second launch), via [Sparkle](https://sparkle-project.org).
-- Runs files in parallel, keeps the Mac awake while working, notifies when done (click opens the folder).
+<p align="center"><a href="https://github.com/RivianTrackr/pixelshift/releases/latest"><strong>Download the latest version</strong></a> · macOS 14 Sonoma or later · Apple Silicon and Intel</p>
 
-Defaults match the Resize Master settings in use when it was replaced:
-scale by height to 1200 px, scale down only, JPEG at 70%, copy non-image files.
+---
 
-## Build
+## Install
 
-Requires Xcode (the Command Line Tools alone lack SwiftUI's macros).
+1. Download `PixelShift-<version>.zip` from the [latest release](https://github.com/RivianTrackr/pixelshift/releases/latest) and open it.
+2. Drag **PixelShift** into your **Applications** folder.
+3. Open it. The first time, macOS may say it can't check the app for malicious software, because PixelShift isn't notarized by Apple yet. Click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to PixelShift. You only need to do this once.
+
+PixelShift updates itself. Choose **PixelShift → Check for Updates…** at any time, or let it check automatically (it asks the second time you open it).
+
+## Use it
+
+- **Drop** images or folders on the window or on the Dock icon, or click **Choose Files…** (⌘O).
+- **Right-click** images or folders in Finder and choose **Resize with PixelShift** (under Quick Actions or Services).
+- Every image is processed with the settings in the window. Results go to a folder you choose, or next to the originals with a name suffix such as `photo-1200.jpg`.
+
+## Features
+
+- **Resize:** by percent, width, height, fit inside a box, crop to an aspect ratio, or crop then fit. Optionally only ever scale down.
+- **Formats:** JPEG, PNG, TIFF and HEIC, with a quality setting, a color space (original, sRGB, Display P3, Adobe RGB) and a fill color for transparent areas.
+- **Metadata:** remove all of it, keep all of it, or keep everything except location. Add artist and copyright, or set the DPI. Photos are always saved upright.
+- **Watermark:** any image, in nine positions or stretched, with offsets from the edge.
+- **Folders:** keeps the folder structure, can copy non-image files along, and asks before replacing anything.
+- **Presets:** save settings as named presets and switch between them with ⌘1–⌘9.
+- Uses every core, keeps the Mac awake while it works, and notifies you when a batch is done.
+
+## Privacy
+
+PixelShift runs entirely on your Mac inside Apple's App Sandbox. It only opens the files you give it, collects no data and has no analytics. Its only network request is the update check, which goes to this repository's GitHub Releases.
+
+## Build from source
+
+Requires Xcode 26 or later (the Command Line Tools alone lack SwiftUI's macros and the icon compiler).
 
 ```bash
+git clone https://github.com/RivianTrackr/pixelshift.git
+cd pixelshift
 swift test                      # engine tests
 scripts/build-app.sh            # build/PixelShift.app (universal, sandboxed)
-scripts/build-app.sh --install  # also copy to /Applications
+scripts/build-app.sh --install  # also copy it to /Applications
 ```
 
-Layout: `Sources/ResizeCore` is the resizing engine (ImageIO + Core Graphics, no UI),
-`Sources/PixelShift` is the SwiftUI app, `Icon/AppIcon.icon` is the Liquid Glass icon (open it in Icon Composer to edit), `scripts/` builds the bundle.
+`Sources/ResizeCore` is the resizing engine (ImageIO and Core Graphics, no UI), `Sources/PixelShift` is the SwiftUI app, and `Icon/AppIcon.icon` is the Liquid Glass icon (open it in Icon Composer). Publishing a release is covered in [RELEASING.md](RELEASING.md).
 
-## Releasing an update
+## Feedback
 
-Copies downloaded from the web update themselves with Sparkle from this repo's GitHub Releases.
-Installed copies read `https://github.com/RivianTrackr/pixelshift/releases/latest/download/appcast.xml`,
-which GitHub points at the newest release.
+Found a bug or want a feature? [Open an issue](https://github.com/RivianTrackr/pixelshift/issues).
 
-1. Put the new version in `VERSION` (for example `1.1`).
-2. Optional: write release notes to `ReleaseNotes/1.1.md`; they show in the update window and on the release page.
-3. Commit, then run `scripts/release.sh`. It builds, zips, signs the update, and creates release `v1.1`
-   with `PixelShift-1.1.zip` and `appcast.xml` attached (needs `gh` signed in). The build number is the commit count, so it always goes up.
+## License
 
-`scripts/release.sh --no-publish` does everything except the upload (output in `release/1.1/`).
-
-Updates are signed with an EdDSA key kept in the login keychain (item "Private key for signing Sparkle updates",
-account `com.riviantrackr.pixelshift`); its public half is `Support/sparkle-public-key.txt`. Back up the private key
-(`.build/artifacts/sparkle/Sparkle/bin/generate_keys --account com.riviantrackr.pixelshift -x key.txt`): without it,
-installed copies can't be updated.
-
-For copies other people download, sign with a Developer ID and notarize, or macOS blocks the first launch:
-`SIGN_IDENTITY="Developer ID Application: …"` (notarizing isn't in the script yet). Ad-hoc builds turn off library validation so Sparkle loads;
-Developer ID builds keep it on.
-
-## App Store readiness
-
-Done: App Sandbox (`Support/PixelShift.entitlements`: user-selected files, app-scoped bookmarks for the watermark),
-privacy manifest (`Support/PrivacyInfo.xcprivacy`: no tracking, no data collected, UserDefaults reason CA92.1),
-universal binary (arm64 + x86_64, macOS 14+), `ITSAppUsesNonExemptEncryption = NO`. Bundle ID `com.riviantrackr.pixelshift`.
-
-The App Store build must leave out Sparkle (the store does its own updates and rejects its sandbox exceptions).
-
-Still needed: Apple Developer Program membership, an Xcode project for Archive/upload, an Apple Distribution
-signing identity (`SIGN_IDENTITY`), and the App Store Connect listing (screenshots, privacy policy and support URLs).
+PixelShift is released under the [MIT License](LICENSE). It uses [Sparkle](https://sparkle-project.org) for updates; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

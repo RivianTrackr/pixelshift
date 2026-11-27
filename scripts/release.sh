@@ -49,8 +49,10 @@ if [[ $PUBLISH == 0 ]]; then
     exit 0
 fi
 
-NOTES_ARGS=(--notes "PixelShift $VERSION")
-[[ -f "$NOTES" ]] && NOTES_ARGS=(--notes-file "$NOTES")
+# Release page text: the notes plus install steps for first-time downloads.
+PAGE="$OUT/release-page.md"
+{ [[ -f "$NOTES" ]] && cat "$NOTES" && echo; cat Support/release-install.md; } > "$PAGE"
+NOTES_ARGS=(--notes-file "$PAGE")
 gh release create "$TAG" --repo "$REPO" --target "$(git rev-parse HEAD)" \
     --title "PixelShift $VERSION" "${NOTES_ARGS[@]}" "$ZIP" "$OUT/appcast.xml"
 echo "Published $TAG: https://github.com/$REPO/releases/tag/$TAG"

@@ -41,6 +41,8 @@ xcrun actool "$PWD/Icon/AppIcon.icon" --compile "$APP/Contents/Resources" \
 
 # Privacy manifest (required by App Store review): no tracking, no data collected.
 cp Support/PrivacyInfo.xcprivacy "$APP/Contents/Resources/"
+# License texts travel with the app (MIT requires the notices in copies).
+cp LICENSE THIRD-PARTY-NOTICES.md "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
