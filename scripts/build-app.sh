@@ -9,8 +9,8 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Develope
 # compares to decide an update is newer) is the commit count, so it only goes up.
 VERSION="$(cat VERSION)"
 BUILD="${BUILD:-$(git rev-list --count HEAD)}"
-# Where installed copies look for updates. Upload release/ (see scripts/release.sh) there.
-FEED_URL="${FEED_URL:-https://riviantrackr.com/pixelshift/appcast.xml}"
+# Where installed copies look for updates. scripts/release.sh publishes there.
+FEED_URL="${FEED_URL:-https://github.com/RivianTrackr/pixelshift/releases/latest/download/appcast.xml}"
 SIGN="${SIGN_IDENTITY:--}"
 
 ARCHS=(--arch arm64 --arch x86_64)
