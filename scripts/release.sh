@@ -10,6 +10,7 @@ cd "$(dirname "$0")/.."
 
 REPO="RivianTrackr/pixelshift"
 VERSION="$(cat VERSION)"
+[[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]] || { echo "VERSION must look like 1.2 or 1.2.3." >&2; exit 1; }
 TAG="v$VERSION"
 PUBLISH=1
 [[ "${1:-}" == "--no-publish" ]] && PUBLISH=0

@@ -36,13 +36,16 @@ Layout: `Sources/ResizeCore` is the resizing engine (ImageIO + Core Graphics, no
 
 ## Releasing an update
 
-Copies downloaded from the web update themselves with Sparkle. Installed copies read
-`https://riviantrackr.com/pixelshift/appcast.xml` (override with `FEED_URL=` when building).
+Copies downloaded from the web update themselves with Sparkle from this repo's GitHub Releases.
+Installed copies read `https://github.com/RivianTrackr/pixelshift/releases/latest/download/appcast.xml`,
+which GitHub points at the newest release.
 
-1. Put the new version in `VERSION` (for example `1.1`) and commit. The build number is the commit count, so it always goes up.
-2. Optional: write release notes to `release/PixelShift-1.1.md`; they show in the update window.
-3. Run `scripts/release.sh`. It builds, zips to `release/PixelShift-1.1.zip`, and adds a signed entry to `release/appcast.xml`.
-4. Upload `appcast.xml` and the zip to the folder the feed URL points at. Keep `release/` between releases; it holds the feed history.
+1. Put the new version in `VERSION` (for example `1.1`).
+2. Optional: write release notes to `ReleaseNotes/1.1.md`; they show in the update window and on the release page.
+3. Commit, then run `scripts/release.sh`. It builds, zips, signs the update, and creates release `v1.1`
+   with `PixelShift-1.1.zip` and `appcast.xml` attached (needs `gh` signed in). The build number is the commit count, so it always goes up.
+
+`scripts/release.sh --no-publish` does everything except the upload (output in `release/1.1/`).
 
 Updates are signed with an EdDSA key kept in the login keychain (item "Private key for signing Sparkle updates",
 account `com.riviantrackr.pixelshift`); its public half is `Support/sparkle-public-key.txt`. Back up the private key
@@ -50,8 +53,7 @@ account `com.riviantrackr.pixelshift`); its public half is `Support/sparkle-publ
 installed copies can't be updated.
 
 For copies other people download, sign with a Developer ID and notarize, or macOS blocks the first launch:
-`SIGN_IDENTITY="Developer ID Application: …" scripts/release.sh`, then `xcrun notarytool submit` the zip and
-`xcrun stapler staple` the app before zipping. Ad-hoc builds turn off library validation so Sparkle loads;
+`SIGN_IDENTITY="Developer ID Application: …"` (notarizing isn't in the script yet). Ad-hoc builds turn off library validation so Sparkle loads;
 Developer ID builds keep it on.
 
 ## App Store readiness
