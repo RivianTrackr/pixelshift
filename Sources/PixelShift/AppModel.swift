@@ -162,12 +162,20 @@ final class AppModel {
             }
         }
 
+        // Saving over the files being resized destroys the originals. Never do it
+        // silently, whatever "Ask before replacing" says.
+        let overOriginals = BatchJobs.replacingOriginals(jobs)
+        if !overOriginals.isEmpty {
+            guard confirmReplacingOriginals(overOriginals) else { return }
+        }
+        let consented = Set(overOriginals.map(\.destination))
+
         let firstFolder = jobs[0].destination.deletingLastPathComponent()
         var summary = BatchSummary(destination: {
             if case .folder(let root) = placement { return root }
             return firstFolder
         }())
-        guard resolveConflicts(&jobs, summary: &summary) else { return }
+        guard resolveConflicts(&jobs, alreadyConfirmed: consented, summary: &summary) else { return }
         run(jobs, resizer: resizer, summary: summary)
     }
 
@@ -202,8 +210,24 @@ final class AppModel {
         return panel.runModal() == .OK ? panel.url : nil
     }
 
+    /// Warns that results would replace the originals. Cancel is the default.
+    private func confirmReplacingOriginals(_ jobs: [BatchJob]) -> Bool {
+        let a = NSAlert()
+        a.alertStyle = .critical
+        let count = jobs.count
+        a.messageText = count == 1
+            ? "“\(jobs[0].destination.lastPathComponent)” would replace its original."
+            : "\(count) resized images would replace their originals."
+        a.informativeText = "The resized images would be saved over the files you’re resizing, and the originals can’t be recovered. To keep them, choose a different folder or add a name suffix."
+        a.addButton(withTitle: "Cancel")
+        a.addButton(withTitle: count == 1 ? "Replace Original" : "Replace Originals")
+        a.buttons[1].hasDestructiveAction = true
+        return a.runModal() == .alertSecondButtonReturn
+    }
+
     /// Asks about files that already exist. Returns false if the user cancels.
-    private func resolveConflicts(_ jobs: inout [BatchJob], summary: inout BatchSummary) -> Bool {
+    private func resolveConflicts(_ jobs: inout [BatchJob], alreadyConfirmed: Set<URL>,
+                                  summary: inout BatchSummary) -> Bool {
         let fm = FileManager.default
         var kept: [BatchJob] = []
         var applyToAll: Bool?   // true = overwrite all, false = skip all
@@ -214,7 +238,8 @@ final class AppModel {
                 summary.skipped += 1
                 continue
             }
-            guard options.warnBeforeOverwriting, fm.fileExists(atPath: job.destination.path) else {
+            guard options.warnBeforeOverwriting, !alreadyConfirmed.contains(job.destination),
+                  fm.fileExists(atPath: job.destination.path) else {
                 kept.append(job)
                 continue
             }

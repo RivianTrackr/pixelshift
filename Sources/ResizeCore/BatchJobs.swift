@@ -24,6 +24,19 @@ public enum BatchJobs {
         return readableTypes.contains { type.conforms(to: $0) }
     }
 
+    /// Resize jobs whose result would be saved over one of the files being read:
+    /// the original itself (same folder, same name), or another dropped file
+    /// (photo.png → photo.jpg when photo.jpg is in the batch too).
+    public static func replacingOriginals(_ jobs: [BatchJob]) -> [BatchJob] {
+        let sources = Set(jobs.map { pathKey($0.source) })
+        return jobs.filter { $0.kind == .resize && sources.contains(pathKey($0.destination)) }
+    }
+
+    /// Mac volumes are usually case-insensitive, so compare paths that way.
+    static func pathKey(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path.lowercased()
+    }
+
     public enum Placement: Sendable, Equatable {
         /// Results go under this folder; dropped folders keep their structure.
         case folder(URL)

@@ -46,6 +46,10 @@ struct PixelShiftApp: App {
                 .disabled(model.isRunning)
             }
         }
+
+        Settings {
+            SettingsView(updates: updates)
+        }
     }
 }
 
@@ -57,12 +61,35 @@ final class Updates {
     private(set) var canCheck = false
     private var observation: NSKeyValueObservation?
 
+    /// Mirrors Sparkle's own settings so the Settings window can change them,
+    /// including after the first-run "check automatically?" question.
+    var automaticChecks: Bool {
+        didSet { controller.updater.automaticallyChecksForUpdates = automaticChecks }
+    }
+    var automaticDownloads: Bool {
+        didSet { controller.updater.automaticallyDownloadsUpdates = automaticDownloads }
+    }
+
     init() {
+        automaticChecks = controller.updater.automaticallyChecksForUpdates
+        automaticDownloads = controller.updater.automaticallyDownloadsUpdates
         observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
             let value = updater.canCheckForUpdates
             Task { @MainActor in self?.canCheck = value }
         }
     }
+
+    /// Re-reads Sparkle's settings (its first-run question may have changed them).
+    func refresh() {
+        if automaticChecks != controller.updater.automaticallyChecksForUpdates {
+            automaticChecks = controller.updater.automaticallyChecksForUpdates
+        }
+        if automaticDownloads != controller.updater.automaticallyDownloadsUpdates {
+            automaticDownloads = controller.updater.automaticallyDownloadsUpdates
+        }
+    }
+
+    var lastChecked: Date? { controller.updater.lastUpdateCheckDate }
 
     func check() { controller.checkForUpdates(nil) }
 }

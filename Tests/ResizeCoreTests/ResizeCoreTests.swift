@@ -243,6 +243,95 @@ private func pixel(_ image: CGImage, x: Int, y: Int) -> [UInt8] {
     }
 }
 
+@Suite struct OverwriteGuardTests {
+    @Test func savingIntoTheSameFolderIsCaught() throws {
+        let dir = try tempDir()
+        let photo = dir.appendingPathComponent("photo.jpg")
+        let other = dir.appendingPathComponent("other.JPEG")
+        try writeImage(photo, width: 10, height: 10, type: "public.jpeg" as CFString)
+        try writeImage(other, width: 10, height: 10, type: "public.jpeg" as CFString)
+        let jobs = BatchJobs.collect(from: [photo, other], into: dir, format: .jpeg, copyNonImageFiles: false)
+        // photo.jpg lands on itself; other.JPEG becomes other.jpg, a new file.
+        #expect(BatchJobs.replacingOriginals(jobs).map(\.source.lastPathComponent) == ["photo.jpg"])
+    }
+
+    @Test func droppedFolderSavedToItsParentIsCaught() throws {
+        let dir = try tempDir()
+        let trip = dir.appendingPathComponent("Trip")
+        try FileManager.default.createDirectory(at: trip, withIntermediateDirectories: true)
+        try writeImage(trip.appendingPathComponent("a.jpg"), width: 10, height: 10, type: "public.jpeg" as CFString)
+        let jobs = BatchJobs.collect(from: [trip], into: dir, format: .jpeg, copyNonImageFiles: false)
+        #expect(BatchJobs.replacingOriginals(jobs).count == 1)
+    }
+
+    @Test func anotherDroppedFileIsCaught() throws {
+        let dir = try tempDir()
+        let png = dir.appendingPathComponent("photo.png")
+        let jpg = dir.appendingPathComponent("photo.jpg")
+        try writeImage(png, width: 10, height: 10, type: "public.png" as CFString)
+        try writeImage(jpg, width: 10, height: 10, type: "public.jpeg" as CFString)
+        let jobs = BatchJobs.collect(from: [png, jpg], into: dir, format: .jpeg, copyNonImageFiles: false)
+        // Clashing outputs are numbered ("photo 2.jpg"), but one of them is still photo.jpg itself.
+        #expect(BatchJobs.replacingOriginals(jobs).count == 1)
+    }
+
+    @Test func otherFoldersAndSuffixesAreFine() throws {
+        let dir = try tempDir()
+        let photo = dir.appendingPathComponent("photo.jpg")
+        try writeImage(photo, width: 10, height: 10, type: "public.jpeg" as CFString)
+        let elsewhere = BatchJobs.collect(from: [photo], into: try tempDir(), format: .jpeg, copyNonImageFiles: false)
+        #expect(BatchJobs.replacingOriginals(elsewhere).isEmpty)
+        let suffixed = BatchJobs.collect(from: [photo], placement: .folder(dir), format: .jpeg, suffix: "-1200", copyNonImageFiles: false)
+        #expect(BatchJobs.replacingOriginals(suffixed).isEmpty)
+    }
+}
+
+@Suite struct LargeImageTests {
+    @Test func bigPhotoDecodesSmallAndStaysCorrect() throws {
+        let dir = try tempDir()
+        let src = dir.appendingPathComponent("big.jpg")
+        // Stored 4000x3000, orientation 6: displayed 3000x4000.
+        try writeImage(src, width: 4000, height: 3000, type: "public.jpeg" as CFString, orientation: 6)
+        let out = dir.appendingPathComponent("out.png")
+        var o = opts(.height, h: 400)
+        o.format = .png
+        let resizer = try ImageResizer(options: o)
+        let source = CGImageSourceCreateWithURL(src as CFURL, nil)!
+        let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as! [CFString: Any]
+        let (decoded, _) = try #require(try resizer.decode(source, props))
+        #expect(max(decoded.width, decoded.height) <= 800)   // not 4000
+
+        try resizer.process(source: src, destination: out)
+        let (img, _) = read(out)
+        #expect(img.width == 300 && img.height == 400)
+    }
+
+    @Test func cropStillLandsInTheMiddle() throws {
+        let dir = try tempDir()
+        let src = dir.appendingPathComponent("wide.png")
+        try writeImage(src, width: 4000, height: 2000, type: "public.png" as CFString)
+        let out = dir.appendingPathComponent("out.png")
+        var o = opts(.cropThenFit, w: 100, h: 100)
+        o.format = .png
+        try ImageResizer(options: o).process(source: src, destination: out)
+        let (img, _) = read(out)
+        #expect(img.width == 100 && img.height == 100)
+        // Centered square of a red | blue image: red on the left, blue on the right.
+        #expect(pixel(img, x: 10, y: 50)[0] > 200 && pixel(img, x: 10, y: 50)[2] < 50)
+        #expect(pixel(img, x: 90, y: 50)[2] > 200 && pixel(img, x: 90, y: 50)[0] < 50)
+    }
+
+    @Test func absurdSizesFailClearly() throws {
+        let dir = try tempDir()
+        let src = dir.appendingPathComponent("p.jpg")
+        try writeImage(src, width: 4000, height: 3000, type: "public.jpeg" as CFString)
+        let o = opts(.percent, pct: 2000, down: false)   // 80000 x 60000
+        #expect(throws: ResizeError.self) {
+            try ImageResizer(options: o).process(source: src, destination: dir.appendingPathComponent("o.jpg"))
+        }
+    }
+}
+
 @Suite struct PresetTests {
     @Test func starterMatchesCarriedOverSettings() {
         let lib = PresetLibrary.starter
@@ -304,6 +393,24 @@ private func pixel(_ image: CGImage, x: Int, y: Int) -> [UInt8] {
     }
 }
 
+@Suite struct InPlaceWriteTests {
+    struct Boom: Error {}
+
+    @Test func failedOverwriteRestoresTheOriginal() throws {
+        let dir = try tempDir()
+        let file = dir.appendingPathComponent("photo.jpg")
+        try writeImage(file, width: 50, height: 50, type: "public.jpeg" as CFString)
+        let original = try Data(contentsOf: file)
+        #expect(throws: Boom.self) {
+            try ImageResizer.overwrite(file, with: Data(repeating: 7, count: 10_000)) { handle, data in
+                try handle.write(contentsOf: data.prefix(100))   // half a write, then the disk "fails"
+                throw Boom()
+            }
+        }
+        #expect(try Data(contentsOf: file) == original)
+    }
+}
+
 @Suite struct MetadataModeTests {
     @Test func keepAllButLocationDropsGPSOnly() throws {
         let dir = try tempDir()
@@ -325,6 +432,110 @@ private func pixel(_ image: CGImage, x: Int, y: Int) -> [UInt8] {
         let outIPTC = props[kCGImagePropertyIPTCDictionary] as? [CFString: Any]
         #expect(outIPTC?[kCGImagePropertyIPTCCity] == nil)
         #expect(outIPTC?[kCGImagePropertyIPTCCaptionAbstract] as? String == "Road trip")
+    }
+
+    /// Writes a JPEG with XMP-only fields (keywords, rating) plus GPS and a city.
+    private func writeXMPPhoto(_ url: URL) throws {
+        let ctx = CGContext(data: nil, width: 200, height: 100, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        let meta = CGImageMetadataCreateMutable()
+        let dc = "http://purl.org/dc/elements/1.1/" as CFString
+        let xmp = "http://ns.adobe.com/xap/1.0/" as CFString
+        let ps = "http://ns.adobe.com/photoshop/1.0/" as CFString
+        let subject = CGImageMetadataTagCreate(dc, "dc" as CFString, "subject" as CFString, .arrayUnordered, ["beach", "sunset"] as CFArray)!
+        CGImageMetadataSetTagWithPath(meta, nil, "dc:subject" as CFString, subject)
+        let rating = CGImageMetadataTagCreate(xmp, "xmp" as CFString, "Rating" as CFString, .string, "4" as CFString)!
+        CGImageMetadataSetTagWithPath(meta, nil, "xmp:Rating" as CFString, rating)
+        // XMP-only fields, with no IPTC/EXIF twin: a color label, Lightroom keywords, an IPTC Core location.
+        let label = CGImageMetadataTagCreate(xmp, "xmp" as CFString, "Label" as CFString, .string, "Red" as CFString)!
+        CGImageMetadataSetTagWithPath(meta, nil, "xmp:Label" as CFString, label)
+        let lr = "http://ns.adobe.com/lightroom/1.0/" as CFString
+        CGImageMetadataRegisterNamespaceForPrefix(meta, lr, "lr" as CFString, nil)
+        let hier = CGImageMetadataTagCreate(lr, "lr" as CFString, "hierarchicalSubject" as CFString, .arrayUnordered, ["Places|Beach"] as CFArray)!
+        CGImageMetadataSetTagWithPath(meta, nil, "lr:hierarchicalSubject" as CFString, hier)
+        let core = "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/" as CFString
+        CGImageMetadataRegisterNamespaceForPrefix(meta, core, "Iptc4xmpCore" as CFString, nil)
+        let loc = CGImageMetadataTagCreate(core, "Iptc4xmpCore" as CFString, "Location" as CFString, .string, "Zilker Park" as CFString)!
+        CGImageMetadataSetTagWithPath(meta, nil, "Iptc4xmpCore:Location" as CFString, loc)
+        let city = CGImageMetadataTagCreate(ps, "photoshop" as CFString, "City" as CFString, .string, "Austin" as CFString)!
+        CGImageMetadataSetTagWithPath(meta, nil, "photoshop:City" as CFString, city)
+        let gps: [CFString: Any] = [kCGImagePropertyGPSLatitude: 30.27, kCGImagePropertyGPSLatitudeRef: "N",
+                                    kCGImagePropertyGPSLongitude: 97.74, kCGImagePropertyGPSLongitudeRef: "W"]
+        _ = CGImageMetadataSetValueMatchingImageProperty(meta, kCGImagePropertyGPSDictionary, kCGImagePropertyGPSLatitude, 30.27 as CFNumber)
+        let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil)!
+        CGImageDestinationAddImageAndMetadata(dest, ctx.makeImage()!, meta, [kCGImagePropertyGPSDictionary: gps] as CFDictionary)
+        #expect(CGImageDestinationFinalize(dest))
+    }
+
+    private func xmpValue(_ url: URL, _ path: String) -> Any? {
+        let src = CGImageSourceCreateWithURL(url as CFURL, nil)!
+        guard let meta = CGImageSourceCopyMetadataAtIndex(src, 0, nil),
+              let tag = CGImageMetadataCopyTagWithPath(meta, nil, path as CFString) else { return nil }
+        return CGImageMetadataTagCopyValue(tag)
+    }
+
+    @Test func keepAllCarriesXMP() throws {
+        let dir = try tempDir()
+        let src = dir.appendingPathComponent("xmp.jpg")
+        try writeXMPPhoto(src)
+        #expect(xmpValue(src, "xmp:Label") != nil)   // the fixture has it
+        #expect(xmpValue(src, "Iptc4xmpCore:Location") != nil)
+
+        var o = opts(.width, w: 100)
+        o.metadata = .keepAll
+        let out = dir.appendingPathComponent("out.jpg")
+        try ImageResizer(options: o).process(source: src, destination: out)
+        #expect(xmpValue(out, "xmp:Rating") as? String == "4")
+        #expect(xmpValue(out, "dc:subject") != nil)
+        #expect(xmpValue(out, "xmp:Label") as? String == "Red")
+        #expect(xmpValue(out, "lr:hierarchicalSubject") != nil)
+        #expect(xmpValue(out, "Iptc4xmpCore:Location") as? String == "Zilker Park")
+        #expect(read(out).1[kCGImagePropertyGPSDictionary] != nil)
+        #expect(read(out).0.width == 100)
+    }
+
+    @Test func keepAllButLocationDropsXMPPlacesToo() throws {
+        let dir = try tempDir()
+        let src = dir.appendingPathComponent("xmp.jpg")
+        try writeXMPPhoto(src)
+        var o = opts(.width, w: 100)
+        o.metadata = .keepAllButLocation
+        let out = dir.appendingPathComponent("out.jpg")
+        try ImageResizer(options: o).process(source: src, destination: out)
+        #expect(xmpValue(out, "xmp:Rating") as? String == "4")
+        #expect(xmpValue(out, "photoshop:City") == nil)
+        #expect(xmpValue(out, "Iptc4xmpCore:Location") == nil)
+        #expect(xmpValue(out, "xmp:Label") as? String == "Red")
+        #expect(xmpValue(out, "lr:hierarchicalSubject") != nil)
+        #expect(xmpValue(out, "exif:GPSLatitude") == nil)
+        #expect(read(out).1[kCGImagePropertyGPSDictionary] == nil)
+    }
+
+    @Test func keptMetadataNeverRotatesAgain() throws {
+        let dir = try tempDir()
+        let src = dir.appendingPathComponent("rotated.jpg")
+        try writeImage(src, width: 400, height: 300, type: "public.jpeg" as CFString, orientation: 6,
+                       extra: [kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFOrientation: 6, kCGImagePropertyTIFFMake: "Cam"]])
+        var o = opts(.none)
+        o.metadata = .keepAll
+        let out = dir.appendingPathComponent("out.jpg")
+        try ImageResizer(options: o).process(source: src, destination: out)
+        let (img, props) = read(out)
+        #expect(img.width == 300 && img.height == 400)
+        #expect((props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1 == 1)
+        #expect(xmpValue(out, "tiff:Orientation").map { "\($0)" } ?? "1" == "1")
+    }
+
+    @Test func removeAllDropsXMP() throws {
+        let dir = try tempDir()
+        let src = dir.appendingPathComponent("xmp.jpg")
+        try writeXMPPhoto(src)
+        let out = dir.appendingPathComponent("out.jpg")
+        try ImageResizer(options: opts(.width, w: 100)).process(source: src, destination: out)
+        #expect(xmpValue(out, "xmp:Rating") == nil)
+        #expect(xmpValue(out, "dc:subject") == nil)
+        #expect(xmpValue(out, "xmp:Label") == nil)
     }
 
     @Test func oldYesNoSettingStillLoads() throws {

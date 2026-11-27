@@ -17,7 +17,7 @@ Drop in images or whole folders, and every one is resized, cropped, watermarked 
 2. Drag **PixelShift** into your **Applications** folder.
 3. Open it. The first time, macOS may say it can't check the app for malicious software, because PixelShift isn't notarized by Apple yet. Click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to PixelShift. You only need to do this once.
 
-PixelShift updates itself. Choose **PixelShift → Check for Updates…** at any time, or let it check automatically (it asks the second time you open it).
+PixelShift updates itself. Choose **PixelShift → Check for Updates…** at any time, or let it check automatically (it asks the second time you open it; change it later in **PixelShift → Settings…**).
 
 ## Use it
 
@@ -29,9 +29,9 @@ PixelShift updates itself. Choose **PixelShift → Check for Updates…** at any
 
 - **Resize:** by percent, width, height, fit inside a box, crop to an aspect ratio, or crop then fit. Optionally only ever scale down.
 - **Formats:** JPEG, PNG, TIFF and HEIC, with a quality setting, a color space (original, sRGB, Display P3, Adobe RGB) and a fill color for transparent areas.
-- **Metadata:** remove all of it, keep all of it, or keep everything except location. Add artist and copyright, or set the DPI. Photos are always saved upright.
+- **Metadata:** remove all of it, keep all of it (EXIF, IPTC and XMP), or keep everything except location. Add artist and copyright, or set the DPI. Photos are always saved upright.
 - **Watermark:** any image, in nine positions or stretched, with offsets from the edge.
-- **Folders:** keeps the folder structure, can copy non-image files along, and asks before replacing anything.
+- **Folders:** keeps the folder structure, can copy non-image files along, can ask before replacing files, and always warns before saving over the originals.
 - **Presets:** save settings as named presets and switch between them with ⌘1–⌘9.
 - Uses every core, keeps the Mac awake while it works, and notifies you when a batch is done.
 

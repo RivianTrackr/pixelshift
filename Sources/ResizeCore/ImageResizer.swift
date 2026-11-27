@@ -9,6 +9,7 @@ public enum ResizeError: LocalizedError {
     case cannotRender
     case cannotWrite
     case cannotLoadWatermark(String)
+    case tooLarge
 
     public var errorDescription: String? {
         switch self {
@@ -16,6 +17,7 @@ public enum ResizeError: LocalizedError {
         case .cannotRender: "The image couldn’t be resized."
         case .cannotWrite: "The resized image couldn’t be saved."
         case .cannotLoadWatermark(let path): "The watermark image at \(path) couldn’t be opened."
+        case .tooLarge: "The image is too large to process. Try a smaller size or percent."
         }
     }
 }
@@ -40,23 +42,70 @@ public final class ImageResizer: @unchecked Sendable {
         }
     }
 
+    /// Largest image PixelShift will hold in memory at once, in pixels (about 1.6 GB
+    /// at 4 bytes a pixel). Guards against huge or booby-trapped files.
+    public static let maxPixels = 400_000_000
+
     public func process(source: URL, destination: URL) throws {
         try autoreleasepool {
             guard let src = CGImageSourceCreateWithURL(source as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-                  CGImageSourceGetCount(src) > 0,
-                  let image = Self.decodeUpright(src)
+                  CGImageSourceGetCount(src) > 0
             else { throw ResizeError.cannotRead }
 
             let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] ?? [:]
-            let plan = ResizePlan.make(sourceWidth: image.width, sourceHeight: image.height, options: options)
+            guard let (image, plan) = try decode(src, props) else { throw ResizeError.cannotRead }
             let output = try render(image, plan: plan)
-            try write(output, sourceProperties: props, to: destination)
+            try write(output, sourceProperties: props,
+                      sourceMetadata: CGImageSourceCopyMetadataAtIndex(src, 0, nil), to: destination)
         }
     }
 
     // MARK: Decode
 
-    /// Decodes the first image with its EXIF orientation applied.
+    /// Decodes the image upright and no bigger than the output needs, and returns
+    /// the plan in the decoded image's pixels. Reading the size from the file
+    /// first means a 100-megapixel photo headed for 1200 px never fully decodes.
+    func decode(_ src: CGImageSource, _ props: [CFString: Any]) throws -> (CGImage, ResizePlan)? {
+        guard let storedW = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let storedH = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              storedW > 0, storedH > 0
+        else {
+            // No size in the header: decode fully and plan from the pixels.
+            guard let image = Self.decodeUpright(src) else { return nil }
+            return (image, ResizePlan.make(sourceWidth: image.width, sourceHeight: image.height, options: options))
+        }
+
+        let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+        let sideways = (5...8).contains(orientation)
+        let w = sideways ? storedH : storedW
+        let h = sideways ? storedW : storedH
+        let plan = ResizePlan.make(sourceWidth: w, sourceHeight: h, options: options)
+        guard plan.outputWidth * plan.outputHeight <= Self.maxPixels else { throw ResizeError.tooLarge }
+
+        // Decode at twice the output size (or full size, if that's smaller), and
+        // let the high-quality resize in render() do the last step.
+        let scale = max(Double(plan.outputWidth) / plan.crop.width, Double(plan.outputHeight) / plan.crop.height)
+        let deep = ((props[kCGImagePropertyDepth] as? NSNumber)?.intValue ?? 8) > 8
+            && (options.format == .png || options.format == .tiff)
+        if scale * 2 < 1 && !deep {
+            let longest = Double(max(w, h)) * scale * 2
+            let thumbOptions: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: Int(longest.rounded(.up)),
+            ]
+            if let image = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbOptions as CFDictionary) {
+                return (image, plan.scaled(toWidth: image.width, height: image.height, from: w, h))
+            }
+        }
+
+        guard w * h <= Self.maxPixels else { throw ResizeError.tooLarge }
+        guard let image = Self.decodeUpright(src) else { return nil }
+        return (image, plan.scaled(toWidth: image.width, height: image.height, from: w, h))
+    }
+
+    /// Decodes the first image at full size with its EXIF orientation applied.
     static func decodeUpright(_ src: CGImageSource) -> CGImage? {
         guard let image = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
         else { return nil }
@@ -150,7 +199,8 @@ public final class ImageResizer: @unchecked Sendable {
 
     // MARK: Write
 
-    func write(_ image: CGImage, sourceProperties: [CFString: Any], to destination: URL) throws {
+    func write(_ image: CGImage, sourceProperties: [CFString: Any], sourceMetadata: CGImageMetadata? = nil,
+               to destination: URL) throws {
         let fm = FileManager.default
         let dir = destination.deletingLastPathComponent()
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -160,9 +210,10 @@ public final class ImageResizer: @unchecked Sendable {
         // destination is the source itself).
         let name = ".pixelshift-\(UUID().uuidString).\(options.format.fileExtension)"
         let props = outputProperties(from: sourceProperties, width: image.width, height: image.height)
+        let xmp = sourceMetadata.flatMap(outputMetadata)
 
         let besideTarget = dir.appendingPathComponent(name)
-        if encode(image, props, to: besideTarget) {
+        if encode(image, props, xmp, to: besideTarget) {
             do {
                 if fm.fileExists(atPath: destination.path) {
                     _ = try fm.replaceItemAt(destination, withItemAt: besideTarget)
@@ -181,25 +232,87 @@ public final class ImageResizer: @unchecked Sendable {
         // the existing file, which needs access to that file alone.
         let scratch = fm.temporaryDirectory.appendingPathComponent(name)
         defer { try? fm.removeItem(at: scratch) }
-        guard encode(image, props, to: scratch), fm.fileExists(atPath: destination.path) else {
+        guard encode(image, props, xmp, to: scratch), fm.fileExists(atPath: destination.path) else {
             throw ResizeError.cannotWrite
         }
         let data = try Data(contentsOf: scratch)
-        let handle = try FileHandle(forWritingTo: destination)
-        defer { try? handle.close() }
-        try handle.truncate(atOffset: 0)
-        try handle.write(contentsOf: data)
+        guard let check = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(check) > 0
+        else { throw ResizeError.cannotWrite }
+        try Self.overwrite(destination, with: data)
     }
 
-    private func encode(_ image: CGImage, _ props: [CFString: Any], to url: URL) -> Bool {
+    /// Writes `data` over an existing file in place. If that fails partway, the
+    /// previous contents are put back, so the file is never left half-written.
+    static func overwrite(_ file: URL, with data: Data,
+                          writer: (FileHandle, Data) throws -> Void = { try $0.write(contentsOf: $1) }) throws {
+        let previous = try Data(contentsOf: file)
+        let handle = try FileHandle(forWritingTo: file)
+        defer { try? handle.close() }
+        do {
+            try handle.truncate(atOffset: 0)
+            try writer(handle, data)
+            try handle.synchronize()
+        } catch {
+            try? handle.truncate(atOffset: 0)
+            try? handle.write(contentsOf: previous)
+            try? handle.synchronize()
+            throw error
+        }
+    }
+
+    private func encode(_ image: CGImage, _ props: [CFString: Any], _ xmp: CGImageMetadata?, to url: URL) -> Bool {
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, options.format.utType.identifier as CFString, 1, nil)
         else { return false }
-        CGImageDestinationAddImage(dest, image, props as CFDictionary)
+        if let xmp {
+            CGImageDestinationAddImageAndMetadata(dest, image, xmp, props as CFDictionary)
+        } else {
+            CGImageDestinationAddImage(dest, image, props as CFDictionary)
+        }
         guard CGImageDestinationFinalize(dest) else {
             try? FileManager.default.removeItem(at: url)
             return false
         }
         return true
+    }
+
+    /// XMP to carry over when keeping metadata: everything except what the
+    /// EXIF and TIFF properties already cover (those are cleaned up in
+    /// outputProperties, including orientation and pixel size), minus places
+    /// when location is dropped. Keeps fields only XMP has, like color labels
+    /// and Lightroom keywords.
+    func outputMetadata(from source: CGImageMetadata) -> CGImageMetadata? {
+        guard options.metadata != .removeAll,
+              let tags = CGImageMetadataCopyTags(source) as? [CGImageMetadataTag]
+        else { return nil }
+        let coveredByProperties: Set<String> = [
+            kCGImageMetadataNamespaceExif as String, kCGImageMetadataNamespaceExifEX as String,
+            kCGImageMetadataNamespaceTIFF as String,
+        ]
+        var dropped: Set<String> = []
+        if options.metadata == .keepAllButLocation {
+            dropped = ["photoshop:City", "photoshop:State", "photoshop:Country",
+                       "Iptc4xmpCore:Location", "Iptc4xmpCore:CountryCode",
+                       "Iptc4xmpExt:LocationCreated", "Iptc4xmpExt:LocationShown"]
+        }
+        if options.addArtistCopyright {
+            if !options.artist.isEmpty { dropped.insert("dc:creator") }
+            if !options.copyright.isEmpty { dropped.insert("dc:rights") }
+        }
+
+        let out = CGImageMetadataCreateMutable()
+        var kept = 0
+        for tag in tags {
+            guard let ns = CGImageMetadataTagCopyNamespace(tag) as String?,
+                  let prefix = CGImageMetadataTagCopyPrefix(tag) as String?,
+                  let name = CGImageMetadataTagCopyName(tag) as String?,
+                  !coveredByProperties.contains(ns)
+            else { continue }
+            let path = "\(prefix):\(name)"
+            if dropped.contains(path) { continue }
+            CGImageMetadataRegisterNamespaceForPrefix(out, ns as CFString, prefix as CFString, nil)
+            if CGImageMetadataSetTagWithPath(out, nil, path as CFString, tag) { kept += 1 }
+        }
+        return kept > 0 ? out : nil
     }
 
     func outputProperties(from source: [CFString: Any], width: Int, height: Int) -> [CFString: Any] {

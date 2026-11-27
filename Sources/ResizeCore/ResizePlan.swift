@@ -62,4 +62,15 @@ public struct ResizePlan: Equatable, Sendable {
             outputHeight: max(1, Int(outH.rounded()))
         )
     }
+
+    /// The same plan for a decoded image of a different size than the one planned
+    /// for (a reduced-size decode), so the crop lands on the same part of the picture.
+    func scaled(toWidth dw: Int, height dh: Int, from w: Int, _ h: Int) -> ResizePlan {
+        guard dw != w || dh != h else { return self }
+        let sx = Double(dw) / Double(w), sy = Double(dh) / Double(h)
+        var c = CGRect(x: (crop.minX * sx).rounded(), y: (crop.minY * sy).rounded(),
+                       width: (crop.width * sx).rounded(), height: (crop.height * sy).rounded())
+        c = c.intersection(CGRect(x: 0, y: 0, width: dw, height: dh))
+        return ResizePlan(crop: c, outputWidth: outputWidth, outputHeight: outputHeight)
+    }
 }
