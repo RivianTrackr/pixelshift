@@ -109,7 +109,9 @@ struct ContentView: View {
             }
             Spacer()
             Button("Show in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([s.destination])
+                // Select what was written (beside the originals that can span folders).
+                let shown = s.outputs.isEmpty ? [s.destination] : Array(s.outputs.prefix(200))
+                NSWorkspace.shared.activateFileViewerSelecting(shown)
             }
             Button {
                 model.summary = nil
@@ -170,7 +172,24 @@ struct ContentView: View {
 
     private var filesSection: some View {
         Section("Files") {
-            Toggle("Copy non-image files", isOn: $model.options.copyNonImageFiles)
+            Picker("Save to", selection: besideBinding) {
+                Text("A folder I choose").tag(false)
+                Text("Next to the originals").tag(true)
+            }
+            LabeledContent("Name suffix") {
+                TextField("", text: $model.options.fileSuffix, prompt: Text(model.options.saveBesideOriginals ? "Required" : "None"))
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 120)
+                    .labelsHidden()
+            }
+            if !model.options.cleanSuffix.isEmpty || model.options.saveBesideOriginals {
+                Text(suffixExample)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !model.options.saveBesideOriginals {
+                Toggle("Copy non-image files", isOn: $model.options.copyNonImageFiles)
+            }
             Toggle("Ask before replacing existing files", isOn: $model.options.warnBeforeOverwriting)
         }
     }
@@ -212,7 +231,9 @@ struct ContentView: View {
 
     private var metadataSection: some View {
         Section("Metadata") {
-            Toggle("Copy metadata (camera, date, location)", isOn: $model.options.copyMetadata)
+            Picker("Camera and photo info", selection: $model.options.metadata) {
+                ForEach(MetadataMode.allCases) { Text($0.title).tag($0) }
+            }
             Toggle("Add artist and copyright", isOn: $model.options.addArtistCopyright)
             if model.options.addArtistCopyright {
                 TextField("Artist", text: $model.options.artist)
@@ -299,6 +320,26 @@ struct ContentView: View {
                                                 b: ns.blueComponent, a: ns.alphaComponent)
             }
         )
+    }
+
+    /// Turning on "next to the originals" pre-fills a suffix so the
+    /// originals can't be replaced.
+    private var besideBinding: Binding<Bool> {
+        Binding(
+            get: { model.options.saveBesideOriginals },
+            set: { on in
+                model.options.saveBesideOriginals = on
+                if on && model.options.cleanSuffix.isEmpty { model.options.fileSuffix = "-resized" }
+            }
+        )
+    }
+
+    private var suffixExample: String {
+        let suffix = model.options.cleanSuffix
+        let ext = model.options.format.fileExtension
+        let place = model.options.saveBesideOriginals ? ", saved in the same folder" : ""
+        return suffix.isEmpty ? "Add a suffix so the originals are never replaced."
+                              : "photo.jpg becomes photo\(suffix).\(ext)\(place)"
     }
 
     private var autoLabel: some View {

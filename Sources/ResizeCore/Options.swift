@@ -97,6 +97,20 @@ public enum OutputColorSpace: Int, CaseIterable, Codable, Sendable, Identifiable
     }
 }
 
+public enum MetadataMode: Int, CaseIterable, Codable, Sendable, Identifiable {
+    case removeAll, keepAll, keepAllButLocation
+
+    public var id: Int { rawValue }
+
+    public var title: String {
+        switch self {
+        case .removeAll: "Remove all"
+        case .keepAll: "Keep all"
+        case .keepAllButLocation: "Keep all except location"
+        }
+    }
+}
+
 public struct RGBA: Codable, Equatable, Sendable {
     public var r, g, b, a: Double
     public init(r: Double, g: Double, b: Double, a: Double) {
@@ -108,6 +122,10 @@ public struct RGBA: Codable, Equatable, Sendable {
 /// settings that were in use when this app replaced it.
 public struct ResizeOptions: Codable, Equatable, Sendable {
     public var copyNonImageFiles = true
+    /// Write each result into the original's folder instead of a chosen folder.
+    public var saveBesideOriginals = false
+    /// Added to every output name, e.g. "-1200" makes photo.jpg -> photo-1200.jpg.
+    public var fileSuffix = ""
     public var warnBeforeOverwriting = false
 
     public var method: ResizeMethod = .height
@@ -116,7 +134,7 @@ public struct ResizeOptions: Codable, Equatable, Sendable {
     public var percent = 100.0
     public var scaleDownOnly = true
 
-    public var copyMetadata = false
+    public var metadata: MetadataMode = .removeAll
     public var addArtistCopyright = false
     public var artist = ""
     public var copyright = ""
@@ -140,6 +158,11 @@ public struct ResizeOptions: Codable, Equatable, Sendable {
 
     public init() {}
 
+    /// The suffix with characters that can't appear in file names removed.
+    public var cleanSuffix: String {
+        String(fileSuffix.filter { $0 != "/" && $0 != ":" }).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// A message for the first setting that would make resizing fail, or nil.
     public var validationError: String? {
         if method.usesWidth && method.usesHeight && (width <= 0 || height <= 0) {
@@ -149,6 +172,9 @@ public struct ResizeOptions: Codable, Equatable, Sendable {
         if method.usesHeight && height <= 0 { return "Height must be greater than zero." }
         if method.usesPercent && percent <= 0 { return "Percent must be greater than zero." }
         if overwriteDPI && dpi <= 0 { return "DPI must be greater than zero." }
+        if saveBesideOriginals && cleanSuffix.isEmpty {
+            return "Add a name suffix (like -1200) when saving next to the originals, so the originals are never replaced."
+        }
         if watermarkPlacement != .none && (watermarkPath ?? "").isEmpty {
             return "Choose a watermark image, or set the watermark to None."
         }
@@ -157,6 +183,8 @@ public struct ResizeOptions: Codable, Equatable, Sendable {
 }
 
 extension ResizeOptions {
+    private enum LegacyKeys: String, CodingKey { case copyMetadata }
+
     // Decode field by field so settings saved by an older build still load
     // after new fields are added.
     public init(from decoder: Decoder) throws {
@@ -166,13 +194,22 @@ extension ResizeOptions {
             (try? c.decodeIfPresent(T.self, forKey: key)) ?? current
         }
         copyNonImageFiles = v(.copyNonImageFiles, copyNonImageFiles)
+        saveBesideOriginals = v(.saveBesideOriginals, saveBesideOriginals)
+        fileSuffix = v(.fileSuffix, fileSuffix)
         warnBeforeOverwriting = v(.warnBeforeOverwriting, warnBeforeOverwriting)
         method = v(.method, method)
         width = v(.width, width)
         height = v(.height, height)
         percent = v(.percent, percent)
         scaleDownOnly = v(.scaleDownOnly, scaleDownOnly)
-        copyMetadata = v(.copyMetadata, copyMetadata)
+        if let mode = try? c.decodeIfPresent(MetadataMode.self, forKey: .metadata) {
+            metadata = mode
+        } else {
+            // Settings saved before the three-way choice stored a yes/no.
+            let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+            let copied = (try? legacy.decodeIfPresent(Bool.self, forKey: .copyMetadata)) ?? false
+            metadata = copied ? .keepAll : .removeAll
+        }
         addArtistCopyright = v(.addArtistCopyright, addArtistCopyright)
         artist = v(.artist, artist)
         copyright = v(.copyright, copyright)

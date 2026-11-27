@@ -164,7 +164,7 @@ private func pixel(_ image: CGImage, x: Int, y: Int) -> [UInt8] {
         #expect(read(stripped).1[kCGImagePropertyGPSDictionary] == nil)
 
         var o = opts(.none)
-        o.copyMetadata = true
+        o.metadata = .keepAll
         let kept = dir.appendingPathComponent("b.jpg")
         try ImageResizer(options: o).process(source: src, destination: kept)
         #expect(read(kept).1[kCGImagePropertyGPSDictionary] != nil)
@@ -301,5 +301,75 @@ private func pixel(_ image: CGImage, x: Int, y: Int) -> [UInt8] {
 
         try ImageResizer(options: opts(.width, w: 100)).process(source: file, destination: file)
         #expect(read(file).0.width == 100)
+    }
+}
+
+@Suite struct MetadataModeTests {
+    @Test func keepAllButLocationDropsGPSOnly() throws {
+        let dir = try tempDir()
+        let src = dir.appendingPathComponent("trip.jpg")
+        let gps: [CFString: Any] = [kCGImagePropertyGPSLatitude: 30.27, kCGImagePropertyGPSLatitudeRef: "N"]
+        let tiff: [CFString: Any] = [kCGImagePropertyTIFFMake: "TestCam", kCGImagePropertyTIFFModel: "One"]
+        let iptc: [CFString: Any] = [kCGImagePropertyIPTCCity: "Austin", kCGImagePropertyIPTCCaptionAbstract: "Road trip"]
+        try writeImage(src, width: 200, height: 200, type: "public.jpeg" as CFString,
+                       extra: [kCGImagePropertyGPSDictionary: gps, kCGImagePropertyTIFFDictionary: tiff,
+                               kCGImagePropertyIPTCDictionary: iptc])
+
+        var o = opts(.none)
+        o.metadata = .keepAllButLocation
+        let out = dir.appendingPathComponent("out.jpg")
+        try ImageResizer(options: o).process(source: src, destination: out)
+        let props = read(out).1
+        #expect(props[kCGImagePropertyGPSDictionary] == nil)
+        #expect((props[kCGImagePropertyTIFFDictionary] as? [CFString: Any])?[kCGImagePropertyTIFFMake] as? String == "TestCam")
+        let outIPTC = props[kCGImagePropertyIPTCDictionary] as? [CFString: Any]
+        #expect(outIPTC?[kCGImagePropertyIPTCCity] == nil)
+        #expect(outIPTC?[kCGImagePropertyIPTCCaptionAbstract] as? String == "Road trip")
+    }
+
+    @Test func oldYesNoSettingStillLoads() throws {
+        let kept = try JSONDecoder().decode(ResizeOptions.self, from: #"{"copyMetadata":true}"#.data(using: .utf8)!)
+        #expect(kept.metadata == .keepAll)
+        let stripped = try JSONDecoder().decode(ResizeOptions.self, from: #"{"copyMetadata":false}"#.data(using: .utf8)!)
+        #expect(stripped.metadata == .removeAll)
+        #expect(try JSONDecoder().decode(ResizeOptions.self, from: Data("{}".utf8)).metadata == .removeAll)
+    }
+}
+
+@Suite struct BesideOriginalsTests {
+    @Test func resultsLandNextToEachOriginalWithSuffix() throws {
+        let root = try tempDir()
+        let album = root.appendingPathComponent("Album")
+        try FileManager.default.createDirectory(at: album.appendingPathComponent("Day 2"), withIntermediateDirectories: true)
+        try writeImage(album.appendingPathComponent("a.png"), width: 10, height: 10, type: "public.png" as CFString)
+        try writeImage(album.appendingPathComponent("Day 2/b.jpg"), width: 10, height: 10, type: "public.jpeg" as CFString)
+        try Data("notes".utf8).write(to: album.appendingPathComponent("notes.txt"))
+        // A result from an earlier run must not be resized again.
+        try writeImage(album.appendingPathComponent("a-1200.jpg"), width: 10, height: 10, type: "public.jpeg" as CFString)
+
+        let jobs = BatchJobs.collect(from: [album], placement: .besideOriginals, format: .jpeg,
+                                     suffix: "-1200", copyNonImageFiles: true)
+        let pairs = Set(jobs.map { "\($0.source.lastPathComponent) -> \($0.destination.path.components(separatedBy: "/Album/").last!)" })
+        #expect(pairs == ["a.png -> a-1200.jpg", "b.jpg -> Day 2/b-1200.jpg"])
+        #expect(jobs.allSatisfy { $0.kind == .resize })
+    }
+
+    @Test func suffixAlsoAppliesInFolderMode() throws {
+        let root = try tempDir()
+        let src = root.appendingPathComponent("photo.heic")
+        try writeImage(src, width: 10, height: 10, type: "public.jpeg" as CFString)
+        let jobs = BatchJobs.collect(from: [src], placement: .folder(URL(fileURLWithPath: "/tmp/out")),
+                                     format: .jpeg, suffix: "-web", copyNonImageFiles: true)
+        #expect(jobs.map(\.destination.path) == ["/tmp/out/photo-web.jpg"])
+    }
+
+    @Test func besideOriginalsNeedsASuffix() {
+        var o = ResizeOptions()
+        o.saveBesideOriginals = true
+        #expect(o.validationError != nil)
+        o.fileSuffix = " / "
+        #expect(o.validationError != nil)
+        o.fileSuffix = "-1200"
+        #expect(o.validationError == nil)
     }
 }

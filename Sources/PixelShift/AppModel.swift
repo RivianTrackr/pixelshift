@@ -10,7 +10,10 @@ struct BatchSummary {
     var skipped = 0
     var failures: [(name: String, message: String)] = []
     var cancelled = false
+    /// The folder to open from the notification.
     var destination: URL
+    /// Files written, so Show in Finder can select them wherever they landed.
+    var outputs: [URL] = []
     var seconds: Double = 0
 }
 
@@ -39,6 +42,7 @@ final class AppModel {
 
     private init() {
         options = OptionsStore.load()
+        FolderAccess.restore()
         library = OptionsStore.loadLibrary()
     }
 
@@ -131,17 +135,38 @@ final class AppModel {
             return
         }
 
-        guard let destination = chooseDestination() else { return }
-        options.lastDestination = destination.path
+        let placement: BatchJobs.Placement
+        if options.saveBesideOriginals {
+            placement = .besideOriginals
+        } else {
+            guard let destination = chooseDestination() else { return }
+            options.lastDestination = destination.path
+            placement = .folder(destination)
+        }
 
-        var jobs = BatchJobs.collect(from: urls, into: destination, format: options.format,
-                                     copyNonImageFiles: options.copyNonImageFiles)
+        var jobs = BatchJobs.collect(from: urls, placement: placement, format: options.format,
+                                     suffix: options.cleanSuffix, copyNonImageFiles: options.copyNonImageFiles)
         guard !jobs.isEmpty else {
-            alert("Nothing to resize.", "None of the dropped items are images this Mac can read.")
+            alert("Nothing to resize.", options.saveBesideOriginals
+                  ? "None of the dropped items are images this Mac can read, or they were all resized before (their names already end in “\(options.cleanSuffix)”)."
+                  : "None of the dropped items are images this Mac can read.")
             return
         }
 
-        var summary = BatchSummary(destination: destination)
+        // Beside the originals, the sandbox may only have access to the dropped
+        // files themselves; ask once per folder and remember the answer.
+        if case .besideOriginals = placement {
+            let folders = Set(jobs.map { $0.destination.deletingLastPathComponent().standardizedFileURL })
+            for folder in folders.sorted(by: { $0.path < $1.path }) where !FolderAccess.canWrite(folder) {
+                guard FolderAccess.requestAccess(to: folder) else { return }
+            }
+        }
+
+        let firstFolder = jobs[0].destination.deletingLastPathComponent()
+        var summary = BatchSummary(destination: {
+            if case .folder(let root) = placement { return root }
+            return firstFolder
+        }())
         guard resolveConflicts(&jobs, summary: &summary) else { return }
         run(jobs, resizer: resizer, summary: summary)
     }
@@ -246,8 +271,10 @@ final class AppModel {
                         summary.failures.append((job.displayName, error))
                     } else if job.kind == .resize {
                         summary.resized += 1
+                        summary.outputs.append(job.destination)
                     } else {
                         summary.copied += 1
+                        summary.outputs.append(job.destination)
                     }
                     if Task.isCancelled {
                         summary.cancelled = true
@@ -377,5 +404,58 @@ final class WatermarkAccess {
     static func bookmark(for url: URL) -> Data? {
         (try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil))
             ?? (try? url.bookmarkData())
+    }
+}
+
+/// Folders the user has let PixelShift write into, kept as security-scoped
+/// bookmarks so the sandbox permission survives relaunches.
+@MainActor
+enum FolderAccess {
+    private static let key = "folderBookmarks"
+    private static var granted: [URL] = []
+
+    /// Reopens every remembered folder for this session.
+    static func restore() {
+        var kept: [Data] = []
+        for data in UserDefaults.standard.array(forKey: key) as? [Data] ?? [] {
+            var stale = false
+            guard let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope],
+                                     relativeTo: nil, bookmarkDataIsStale: &stale)
+            else { continue }
+            _ = url.startAccessingSecurityScopedResource()
+            granted.append(url)
+            kept.append(stale ? (WatermarkAccess.bookmark(for: url) ?? data) : data)
+        }
+        UserDefaults.standard.set(kept, forKey: key)
+    }
+
+    /// Whether a file can be created in `folder` right now.
+    static func canWrite(_ folder: URL) -> Bool {
+        let probe = folder.appendingPathComponent(".pixelshift-probe-\(UUID().uuidString)")
+        guard FileManager.default.createFile(atPath: probe.path, contents: nil) else { return false }
+        try? FileManager.default.removeItem(at: probe)
+        return true
+    }
+
+    /// Asks the user to allow `folder` (or a folder above it). Returns false
+    /// if they cancel or still pick something that doesn't cover it.
+    static func requestAccess(to folder: URL) -> Bool {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = folder
+        panel.prompt = "Allow"
+        panel.message = "PixelShift needs permission to save resized images in “\(folder.lastPathComponent)”. Click Allow. You’ll only be asked once for this folder."
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+
+        if let data = WatermarkAccess.bookmark(for: url) {
+            var all = UserDefaults.standard.array(forKey: key) as? [Data] ?? []
+            all.append(data)
+            UserDefaults.standard.set(all, forKey: key)
+        }
+        _ = url.startAccessingSecurityScopedResource()
+        granted.append(url)
+        return canWrite(folder)
     }
 }

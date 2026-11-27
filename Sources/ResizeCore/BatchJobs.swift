@@ -24,10 +24,24 @@ public enum BatchJobs {
         return readableTypes.contains { type.conforms(to: $0) }
     }
 
-    /// Expands dropped files and folders into jobs. Folders keep their
-    /// structure under `destination`; images get the output extension;
-    /// other files are copied as-is when `copyNonImageFiles` is on.
+    public enum Placement: Sendable, Equatable {
+        /// Results go under this folder; dropped folders keep their structure.
+        case folder(URL)
+        /// Each result goes in the same folder as its original.
+        case besideOriginals
+    }
+
+    /// Convenience for the folder placement with no name suffix.
     public static func collect(from urls: [URL], into destination: URL, format: OutputFormat, copyNonImageFiles: Bool) -> [BatchJob] {
+        collect(from: urls, placement: .folder(destination), format: format, suffix: "", copyNonImageFiles: copyNonImageFiles)
+    }
+
+    /// Expands dropped files and folders into jobs. Images get the output
+    /// extension and `suffix`; other files are copied as-is when
+    /// `copyNonImageFiles` is on (never beside the originals, where a copy
+    /// would be a pointless duplicate).
+    public static func collect(from urls: [URL], placement: Placement, format: OutputFormat,
+                               suffix: String, copyNonImageFiles: Bool) -> [BatchJob] {
         let fm = FileManager.default
         var jobs: [BatchJob] = []
         var claimed = Set<String>()
@@ -36,29 +50,46 @@ public enum BatchJobs {
             let name = file.lastPathComponent
             guard !name.hasPrefix(".") else { return }
             let isImage = isReadableImage(file)
-            guard isImage || copyNonImageFiles else { return }
+            let beside = placement == .besideOriginals
+            guard isImage || (copyNonImageFiles && !beside) else { return }
 
-            let base = isImage ? file.deletingPathExtension().lastPathComponent : name
-            let ext = isImage ? format.fileExtension : ""
-            var outName = ext.isEmpty ? base : "\(base).\(ext)"
-            var relative = relativeDir.isEmpty ? outName : "\(relativeDir)/\(outName)"
+            let stem = isImage ? file.deletingPathExtension().lastPathComponent : (name as NSString).deletingPathExtension
+            // Beside the originals, skip results of an earlier run (photo-1200.jpg).
+            if beside && !suffix.isEmpty && stem.hasSuffix(suffix) { return }
 
-            // Two inputs that land on one name (photo.png + photo.jpg) get a suffix.
+            let ext = isImage ? format.fileExtension : (name as NSString).pathExtension
+            let base = isImage ? stem + suffix : stem
+            func fileName(_ n: Int?) -> String {
+                let numbered = n.map { "\(base) \($0)" } ?? base
+                return ext.isEmpty ? numbered : "\(numbered).\(ext)"
+            }
+
+            let folder: URL
+            let shownDir: String
+            switch placement {
+            case .folder(let root):
+                folder = relativeDir.isEmpty ? root : root.appendingPathComponent(relativeDir)
+                shownDir = relativeDir
+            case .besideOriginals:
+                folder = file.deletingLastPathComponent()
+                shownDir = folder.lastPathComponent
+            }
+
+            // Two inputs that land on one name (photo.png + photo.jpg) get a number.
+            var outName = fileName(nil)
             var n = 2
-            while claimed.contains(relative.lowercased()) {
-                let stem = isImage ? base : (name as NSString).deletingPathExtension
-                let origExt = isImage ? ext : (name as NSString).pathExtension
-                outName = origExt.isEmpty ? "\(stem) \(n)" : "\(stem) \(n).\(origExt)"
-                relative = relativeDir.isEmpty ? outName : "\(relativeDir)/\(outName)"
+            while claimed.contains(folder.appendingPathComponent(outName).path.lowercased()) {
+                outName = fileName(n)
                 n += 1
             }
-            claimed.insert(relative.lowercased())
+            let destination = folder.appendingPathComponent(outName)
+            claimed.insert(destination.path.lowercased())
 
             jobs.append(BatchJob(
                 source: file,
-                destination: destination.appendingPathComponent(relative),
+                destination: destination,
                 kind: isImage ? .resize : .copy,
-                displayName: relative
+                displayName: shownDir.isEmpty ? outName : "\(shownDir)/\(outName)"
             ))
         }
 

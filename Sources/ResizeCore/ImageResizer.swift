@@ -205,8 +205,19 @@ public final class ImageResizer: @unchecked Sendable {
     func outputProperties(from source: [CFString: Any], width: Int, height: Int) -> [CFString: Any] {
         var props: [CFString: Any] = [:]
 
-        if options.copyMetadata {
+        if options.metadata != .removeAll {
             props = source
+            if options.metadata == .keepAllButLocation {
+                props.removeValue(forKey: kCGImagePropertyGPSDictionary)
+                if var iptc = props[kCGImagePropertyIPTCDictionary] as? [CFString: Any] {
+                    for key in [kCGImagePropertyIPTCCity, kCGImagePropertyIPTCSubLocation,
+                                kCGImagePropertyIPTCProvinceState, kCGImagePropertyIPTCCountryPrimaryLocationName,
+                                kCGImagePropertyIPTCCountryPrimaryLocationCode] {
+                        iptc.removeValue(forKey: key)
+                    }
+                    props[kCGImagePropertyIPTCDictionary] = iptc
+                }
+            }
             for key in [kCGImagePropertyPixelWidth, kCGImagePropertyPixelHeight, kCGImagePropertyDepth,
                         kCGImagePropertyHasAlpha, kCGImagePropertyColorModel, kCGImagePropertyProfileName,
                         kCGImagePropertyIsFloat, kCGImagePropertyIsIndexed, kCGImagePropertyPrimaryImage] {

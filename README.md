@@ -8,9 +8,9 @@ folder, and every image is resized with the settings in the window.
 
 ## What it does
 
-- **Files:** keeps folder structure, copies non-image files, asks before replacing (Replace / Skip / Apply to all).
+- **Files:** save to a chosen folder (keeps folder structure, copies non-image files) or next to the originals; optional name suffix (photo.jpg → photo-1200.jpg, required beside originals); asks before replacing (Replace / Skip / Apply to all). Beside originals, the sandbox asks once per folder and remembers it.
 - **Resize:** do not resize, by percent, by width, by height, fit to rectangle, crop to aspect ratio, crop then fit; scale down only.
-- **Metadata:** copy EXIF/GPS/IPTC or strip it, add artist and copyright, set DPI. Photos are always saved upright (EXIF rotation applied).
+- **Metadata:** remove all, keep all, or keep all except location (drops GPS and IPTC place fields), add artist and copyright, set DPI. Photos are always saved upright (EXIF rotation applied).
 - **Watermark:** any image, nine positions plus stretch, pixel offsets inward from the edge.
 - **Output:** JPEG, PNG, TIFF, HEIC; original, sRGB, Display P3 or Adobe RGB; quality; fill color for transparent areas.
 - **Presets:** named sets of settings in the window and the Presets menu (⌘1–⌘9); shows "(edited)" when settings drift from the chosen preset. Starts with "Web, 1200 tall" and "Square 1080".
